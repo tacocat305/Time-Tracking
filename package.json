@@ -1,0 +1,46 @@
+{
+  "name": "legal-time-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format:rust": "bash -lc '. \"$HOME/.cargo/env\" && cargo fmt --manifest-path src-tauri/Cargo.toml --all'",
+    "format:rust:check": "bash -lc '. \"$HOME/.cargo/env\" && cargo fmt --manifest-path src-tauri/Cargo.toml --all --check'",
+    "lint:rust": "bash -lc '. \"$HOME/.cargo/env\" && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings'"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tauri-apps/cli": "^2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "jsdom": "^29.1.1",
+    "prettier": "^3.9.4",
+    "typescript": "~5.8.3",
+    "typescript-eslint": "^8.63.0",
+    "vite": "^7.0.4",
+    "vitest": "^4.1.10"
+  }
+}
