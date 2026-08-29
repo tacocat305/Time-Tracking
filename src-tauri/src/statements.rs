@@ -47,10 +47,22 @@ pub fn export_invoice_pdf<R: Runtime>(
 
     let filename = build_statement_filename(&invoice);
     let output_path = export_dir.join(filename);
+    let pending_path = output_path.with_extension("pdf.pending");
     let pdf_bytes = render_statement_pdf(&invoice, &statement_profile)?;
 
-    fs::write(&output_path, pdf_bytes)
-        .map_err(|error| format!("failed to write statement PDF: {error}"))?;
+    fs::write(&pending_path, pdf_bytes)
+        .map_err(|error| format!("failed to write pending statement PDF: {error}"))?;
+
+    #[cfg(target_os = "windows")]
+    if output_path.exists() {
+        fs::remove_file(&output_path)
+            .map_err(|error| format!("failed to replace the existing statement PDF: {error}"))?;
+    }
+
+    if let Err(error) = fs::rename(&pending_path, &output_path) {
+        let _ = fs::remove_file(&pending_path);
+        return Err(format!("failed to commit statement PDF: {error}"));
+    }
 
     Ok(ExportInvoicePdfResponse {
         path: output_path.to_string_lossy().to_string(),
@@ -193,7 +205,7 @@ fn render_invoice_header(
     for (index, line) in billed_to_lines.iter().take(3).enumerate() {
         composer.draw_text(
             LEFT_MARGIN,
-            515.5 - index as f32 * 13.5,
+            531.5 - index as f32 * 13.5,
             10.5,
             TEXT_COLOR,
             line,
@@ -202,7 +214,7 @@ fn render_invoice_header(
 
     composer.draw_text(
         199.0,
-        515.5,
+        531.5,
         10.5,
         TEXT_COLOR,
         &format_numeric_date(&invoice.issued_on),
@@ -215,7 +227,7 @@ fn render_invoice_header(
         TEXT_COLOR,
         &format_numeric_date(&add_days_to_date(&invoice.issued_on, 14)),
     );
-    composer.draw_text(311.5, 515.5, 10.5, TEXT_COLOR, &invoice.statement_number);
+    composer.draw_text(311.5, 531.5, 10.5, TEXT_COLOR, &invoice.statement_number);
     composer.draw_right_text(
         RIGHT_EDGE,
         519.0,
@@ -225,11 +237,11 @@ fn render_invoice_header(
     );
 
     composer.draw_filled_rule(LEFT_MARGIN, RIGHT_EDGE, 449.25, 2.25, INVOICE_BLUE);
-    composer.draw_text(LEFT_MARGIN, 431.25, 10.5, TEXT_COLOR, "Description");
-    composer.draw_right_text(RATE_RIGHT, 431.25, 10.5, TEXT_COLOR, "Rate");
-    composer.draw_right_text(QUANTITY_RIGHT, 431.25, 10.5, TEXT_COLOR, "Qty");
-    composer.draw_right_text(RIGHT_EDGE, 431.25, 10.5, TEXT_COLOR, "Line Total");
-    composer.y = 403.25;
+    composer.draw_text(LEFT_MARGIN, 431.25, 10.5, INVOICE_BLUE, "Description");
+    composer.draw_right_text(RATE_RIGHT, 431.25, 10.5, INVOICE_BLUE, "Rate");
+    composer.draw_right_text(QUANTITY_RIGHT, 431.25, 10.5, INVOICE_BLUE, "Qty");
+    composer.draw_right_text(RIGHT_EDGE, 431.25, 10.5, INVOICE_BLUE, "Line Total");
+    composer.y = 402.75;
 }
 
 fn render_invoice_rows(
@@ -396,7 +408,7 @@ fn render_invoice_totals(composer: &mut PdfComposer<'_>, invoice: &InvoiceRecord
         RIGHT_EDGE,
         subtotal_y - 91.0,
         10.5,
-        INVOICE_BLUE,
+        TEXT_COLOR,
         &format_currency(amount_due),
     );
 }
@@ -1139,6 +1151,7 @@ mod tests {
         };
 
         let pdf = render_statement_pdf(&invoice, &profile).expect("render reference invoice");
+        let pdf_text = String::from_utf8_lossy(&pdf);
         assert!(pdf.starts_with(b"%PDF-1.4"));
         assert!(pdf.windows(8).any(|window| window == b"/ArialMT"));
         assert!(pdf.windows(13).any(|window| window == b"/DCTDecode /L"));
@@ -1149,6 +1162,12 @@ mod tests {
                 .count(),
             2
         );
+        assert!(pdf_text
+            .contains("0.0000 0.0000 0.0000 rg 51.00 531.50 Td (Signature Health, Inc.) Tj"));
+        assert!(pdf_text.contains("0.0784 0.3765 0.6667 rg 51.00 431.25 Td (Description) Tj"));
+        assert!(pdf_text.lines().any(|line| {
+            line.contains("0.0000 0.0000 0.0000 rg") && line.contains("($2,775.00) Tj")
+        }));
 
         let fixture = std::env::temp_dir().join("legal-time-tracker-reference-layout.pdf");
         fs::write(&fixture, pdf).expect("write visual regression fixture");

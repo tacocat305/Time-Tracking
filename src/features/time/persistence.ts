@@ -24,6 +24,21 @@ type BackupExportResponse = {
   path: string;
 };
 
+export type StorageSecurityStatus = {
+  configured: boolean;
+  locked: boolean;
+};
+
+export type BackupVerificationResponse = {
+  clientCount: number;
+  createdAt: number;
+  entryCount: number;
+  expenseCount: number;
+  invoiceCount: number;
+  message: string;
+  valid: boolean;
+};
+
 export function loadInitialTrackerState() {
   if (isTauri()) {
     return createDefaultTrackerState();
@@ -97,6 +112,52 @@ export async function persistTrackerState(
   }
 }
 
+export async function getStorageSecurityStatus(): Promise<StorageSecurityStatus> {
+  if (!isTauri()) {
+    return { configured: false, locked: false };
+  }
+  return await invoke<StorageSecurityStatus>("get_storage_security_status");
+}
+
+export async function configureTrackerSecurity(
+  state: TrackerState,
+  passphrase: string
+) {
+  if (!isTauri()) {
+    return false;
+  }
+  try {
+    await invoke("configure_tracker_security", { passphrase, state });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function unlockTrackerStorage(passphrase: string) {
+  if (!isTauri()) {
+    return false;
+  }
+  try {
+    await invoke("unlock_storage", { passphrase });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function lockTrackerStorage() {
+  if (!isTauri()) {
+    return false;
+  }
+  try {
+    await invoke("lock_storage");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function listTrackerBackups() {
   if (!isTauri()) {
     return [] satisfies BackupSnapshotRecord[];
@@ -166,6 +227,21 @@ export async function restoreTrackerBackup(
       backups: restored.backups,
       state: normalizeTrackerState(restored.state),
     };
+  } catch {
+    return null;
+  }
+}
+
+export async function verifyTrackerBackup(
+  backupId: string
+): Promise<BackupVerificationResponse | null> {
+  if (!isTauri()) {
+    return null;
+  }
+  try {
+    return await invoke<BackupVerificationResponse>("verify_tracker_backup", {
+      backupId,
+    });
   } catch {
     return null;
   }

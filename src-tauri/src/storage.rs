@@ -10,6 +10,12 @@ use std::process::Command;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::security::{
+    configure_security, decode_protected_json, encode_encrypted_json, encode_protected_json,
+    inspect_protected_metadata, is_security_configured, remove_security_config,
+    ProtectedDocumentMetadata,
+};
+
 #[cfg(target_os = "macos")]
 const SQLITE_BINARY_PATH: &str = "/usr/bin/sqlite3";
 #[cfg(target_os = "macos")]
@@ -318,6 +324,18 @@ pub struct BackupExportResponse {
     pub path: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupVerificationResponse {
+    pub client_count: usize,
+    pub created_at: u64,
+    pub entry_count: usize,
+    pub expense_count: usize,
+    pub invoice_count: usize,
+    pub message: String,
+    pub valid: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BackupEnvelope {
@@ -377,7 +395,7 @@ pub fn load_tracker_state<R: Runtime>(app: AppHandle<R>) -> Result<TrackerState,
     let _ = create_automatic_backup_if_needed(&storage_dir, &state);
     let _ = write_background_backup_source(&storage_dir, &state);
     let _ = install_background_backup_schedule(&storage_dir);
-    let _ = sync_backup_to_selected_folder(&state);
+    let _ = sync_backup_to_selected_folder(&storage_dir, &state);
     Ok(state)
 }
 
@@ -392,8 +410,32 @@ pub fn save_tracker_state<R: Runtime>(
 
     let _ = create_automatic_backup_if_needed(&storage_dir, &state);
     let _ = write_background_backup_source(&storage_dir, &state);
-    let _ = sync_backup_to_selected_folder(&state);
+    let _ = sync_backup_to_selected_folder(&storage_dir, &state);
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn configure_tracker_security<R: Runtime>(
+    app: AppHandle<R>,
+    state: TrackerState,
+    passphrase: String,
+) -> Result<(), String> {
+    let storage_dir = ensure_storage_dir(&app)?;
+    configure_security(&storage_dir, &passphrase)?;
+
+    if let Err(error) = save_state(&storage_dir, &state) {
+        remove_security_config(&storage_dir);
+        return Err(error);
+    }
+
+    // The live state is already protected at this point. Supplemental backup
+    // maintenance must not leave the UI thinking protection was never enabled.
+    let _ = migrate_backup_directory_to_encryption(&storage_dir);
+    let _ = write_background_backup_source(&storage_dir, &state);
+    let _ = migrate_selected_export_directory_to_encryption(&storage_dir, &state);
+    let _ = sync_backup_to_selected_folder(&storage_dir, &state);
+    let _ = create_backup_snapshot(&storage_dir, &state, "manual");
     Ok(())
 }
 
@@ -404,12 +446,14 @@ pub fn choose_backup_export_directory() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn export_tracker_backup(
+pub fn export_tracker_backup<R: Runtime>(
+    app: AppHandle<R>,
     state: TrackerState,
     directory: String,
 ) -> Result<BackupExportResponse, String> {
+    let storage_dir = ensure_storage_dir(&app)?;
     let directory = validate_export_directory(&directory)?;
-    let path = write_external_backup(&directory, &state, true)?;
+    let path = write_external_backup(&storage_dir, &directory, &state, true)?;
     Ok(BackupExportResponse {
         path: path.to_string_lossy().to_string(),
     })
@@ -453,6 +497,25 @@ pub fn restore_tracker_backup<R: Runtime>(
     })
 }
 
+#[tauri::command]
+pub fn verify_tracker_backup<R: Runtime>(
+    app: AppHandle<R>,
+    backup_id: String,
+) -> Result<BackupVerificationResponse, String> {
+    let storage_dir = ensure_storage_dir(&app)?;
+    let (state, created_at) = load_backup_snapshot_with_timestamp(&storage_dir, &backup_id)?;
+
+    Ok(BackupVerificationResponse {
+        client_count: state.clients.len(),
+        created_at,
+        entry_count: state.entries.len(),
+        expense_count: state.expenses.len(),
+        invoice_count: state.invoices.len(),
+        message: "Backup decrypted and validated without changing live data.".to_string(),
+        valid: true,
+    })
+}
+
 fn ensure_storage_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let storage_dir = app
         .path()
@@ -491,11 +554,9 @@ fn load_state(storage_dir: &Path) -> Result<TrackerState, String> {
     let state_path = storage_dir.join(STATE_FILE_NAME);
 
     if state_path.exists() {
-        let contents = fs::read_to_string(&state_path)
+        let contents = fs::read(&state_path)
             .map_err(|error| format!("failed to read tracker state: {error}"))?;
-
-        return serde_json::from_str::<TrackerState>(&contents)
-            .map_err(|error| format!("failed to parse tracker state: {error}"));
+        return decode_protected_json::<TrackerState>(&contents).map(|(state, _)| state);
     }
 
     if let Some(legacy_state) = load_legacy_sqlite_state(storage_dir)? {
@@ -509,8 +570,14 @@ fn load_state(storage_dir: &Path) -> Result<TrackerState, String> {
 fn save_state(storage_dir: &Path, state: &TrackerState) -> Result<(), String> {
     let state_path = storage_dir.join(STATE_FILE_NAME);
     let temporary_path = storage_dir.join("tracker_state.pending.json");
-    let contents = serde_json::to_string_pretty(state)
-        .map_err(|error| format!("failed to serialize tracker state: {error}"))?;
+    let contents = encode_protected_json(
+        storage_dir,
+        state,
+        ProtectedDocumentMetadata {
+            created_at: None,
+            kind: None,
+        },
+    )?;
 
     fs::write(&temporary_path, contents)
         .map_err(|error| format!("failed to write pending tracker state: {error}"))?;
@@ -529,14 +596,13 @@ fn write_background_backup_source(storage_dir: &Path, state: &TrackerState) -> R
     let envelope = build_backup_envelope(state, "automatic")?;
     let source_path = storage_dir.join(BACKGROUND_BACKUP_SOURCE_NAME);
     let temporary_path = storage_dir.join("background_backup_source.pending.json");
-    let contents = serde_json::to_vec_pretty(&envelope)
-        .map_err(|error| format!("failed to serialize background backup source: {error}"))?;
+    let contents = encode_backup_envelope(storage_dir, &envelope)?;
     fs::write(&temporary_path, contents)
         .map_err(|error| format!("failed to write background backup source: {error}"))?;
     replace_file(&temporary_path, &source_path)
 }
 
-fn sync_backup_to_selected_folder(state: &TrackerState) -> Result<(), String> {
+fn sync_backup_to_selected_folder(storage_dir: &Path, state: &TrackerState) -> Result<(), String> {
     let Some(directory) = state
         .app_preferences
         .backup_export_directory
@@ -546,7 +612,7 @@ fn sync_backup_to_selected_folder(state: &TrackerState) -> Result<(), String> {
         return Ok(());
     };
     let directory = validate_export_directory(directory)?;
-    write_external_backup(&directory, state, false).map(|_| ())
+    write_external_backup(storage_dir, &directory, state, false).map(|_| ())
 }
 
 fn validate_export_directory(directory: &str) -> Result<PathBuf, String> {
@@ -561,6 +627,7 @@ fn validate_export_directory(directory: &str) -> Result<PathBuf, String> {
 }
 
 fn write_external_backup(
+    storage_dir: &Path,
     directory: &Path,
     state: &TrackerState,
     timestamped: bool,
@@ -573,8 +640,7 @@ fn write_external_backup(
     };
     let output_path = directory.join(filename);
     let temporary_path = directory.join(format!("{CLOUD_CURRENT_BACKUP_NAME}.pending"));
-    let contents = serde_json::to_vec_pretty(&envelope)
-        .map_err(|error| format!("failed to serialize exported backup: {error}"))?;
+    let contents = encode_backup_envelope(storage_dir, &envelope)?;
     fs::write(&temporary_path, contents)
         .map_err(|error| format!("failed to write exported backup: {error}"))?;
     replace_file(&temporary_path, &output_path)?;
@@ -597,6 +663,85 @@ fn build_backup_envelope(state: &TrackerState, kind: &str) -> Result<BackupEnvel
         kind: kind.to_string(),
         state: state.clone(),
     })
+}
+
+fn encode_backup_envelope(
+    storage_dir: &Path,
+    envelope: &BackupEnvelope,
+) -> Result<Vec<u8>, String> {
+    let metadata = ProtectedDocumentMetadata {
+        created_at: Some(envelope.created_at),
+        kind: Some(envelope.kind.clone()),
+    };
+    if is_security_configured(storage_dir) {
+        encode_encrypted_json(envelope, metadata)
+    } else {
+        serde_json::to_vec_pretty(envelope)
+            .map_err(|error| format!("failed to serialize tracker backup: {error}"))
+    }
+}
+
+fn migrate_backup_directory_to_encryption(storage_dir: &Path) -> Result<(), String> {
+    let backup_dir = ensure_backup_dir(storage_dir)?;
+    for entry in fs::read_dir(&backup_dir)
+        .map_err(|error| format!("failed to read backup directory: {error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to read backup entry: {error}"))?
+            .path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        migrate_backup_file_to_encryption(storage_dir, &path)?;
+    }
+    Ok(())
+}
+
+fn migrate_selected_export_directory_to_encryption(
+    storage_dir: &Path,
+    state: &TrackerState,
+) -> Result<(), String> {
+    let Some(directory) = state
+        .app_preferences
+        .backup_export_directory
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let directory = validate_export_directory(directory)?;
+    for entry in fs::read_dir(&directory)
+        .map_err(|error| format!("failed to read selected backup directory: {error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to read selected backup entry: {error}"))?
+            .path();
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if filename == CLOUD_CURRENT_BACKUP_NAME
+            || (filename.starts_with("legal-time-tracker-") && filename.ends_with(".backup.json"))
+        {
+            migrate_backup_file_to_encryption(storage_dir, &path)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_backup_file_to_encryption(storage_dir: &Path, path: &Path) -> Result<(), String> {
+    let contents = fs::read(path)
+        .map_err(|error| format!("failed to read backup during encryption migration: {error}"))?;
+    if inspect_protected_metadata(&contents).is_some() {
+        return Ok(());
+    }
+    let envelope = serde_json::from_slice::<BackupEnvelope>(&contents)
+        .map_err(|error| format!("failed to parse backup during encryption migration: {error}"))?;
+    let encrypted = encode_backup_envelope(storage_dir, &envelope)?;
+    let pending = path.with_extension("pending");
+    fs::write(&pending, encrypted)
+        .map_err(|error| format!("failed to write encrypted backup migration: {error}"))?;
+    replace_file(&pending, path)
 }
 
 #[cfg(target_os = "macos")]
@@ -782,10 +927,9 @@ fn create_backup_snapshot(
         kind: kind.to_string(),
         state: state.clone(),
     };
-    let contents = serde_json::to_string_pretty(&envelope)
-        .map_err(|error| format!("failed to serialize tracker backup: {error}"))?;
+    let contents = encode_backup_envelope(storage_dir, &envelope)?;
 
-    fs::write(&backup_path, contents.as_bytes())
+    fs::write(&backup_path, contents)
         .map_err(|error| format!("failed to write tracker backup: {error}"))?;
 
     prune_old_backups(&backup_dir)?;
@@ -804,15 +948,22 @@ fn create_backup_snapshot(
 }
 
 fn load_backup_snapshot(storage_dir: &Path, backup_id: &str) -> Result<TrackerState, String> {
+    load_backup_snapshot_with_timestamp(storage_dir, backup_id).map(|(state, _)| state)
+}
+
+fn load_backup_snapshot_with_timestamp(
+    storage_dir: &Path,
+    backup_id: &str,
+) -> Result<(TrackerState, u64), String> {
     let backup_dir = ensure_backup_dir(storage_dir)?;
     let backup_filename = sanitize_backup_id(backup_id)?;
     let backup_path = backup_dir.join(backup_filename);
-    let contents = fs::read_to_string(&backup_path)
+    let contents = fs::read(&backup_path)
         .map_err(|error| format!("failed to read tracker backup: {error}"))?;
-    let envelope = serde_json::from_str::<BackupEnvelope>(&contents)
-        .map_err(|error| format!("failed to parse tracker backup: {error}"))?;
+    let (envelope, metadata) = decode_protected_json::<BackupEnvelope>(&contents)?;
+    let created_at = metadata.created_at.unwrap_or(envelope.created_at);
 
-    Ok(envelope.state)
+    Ok((envelope.state, created_at))
 }
 
 fn list_backup_snapshots(storage_dir: &Path) -> Result<Vec<BackupSnapshotRecord>, String> {
@@ -829,13 +980,21 @@ fn list_backup_snapshots(storage_dir: &Path) -> Result<Vec<BackupSnapshotRecord>
             continue;
         }
 
-        let contents = match fs::read_to_string(&path) {
+        let contents = match fs::read(&path) {
             Ok(contents) => contents,
             Err(_) => continue,
         };
-        let envelope = match serde_json::from_str::<BackupEnvelope>(&contents) {
-            Ok(envelope) => envelope,
-            Err(_) => continue,
+        let (created_at, kind) = if let Some(metadata) = inspect_protected_metadata(&contents) {
+            let (Some(created_at), Some(kind)) = (metadata.created_at, metadata.kind) else {
+                continue;
+            };
+            (created_at, kind)
+        } else {
+            let envelope = match serde_json::from_slice::<BackupEnvelope>(&contents) {
+                Ok(envelope) => envelope,
+                Err(_) => continue,
+            };
+            (envelope.created_at, envelope.kind)
         };
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
@@ -843,9 +1002,9 @@ fn list_backup_snapshots(storage_dir: &Path) -> Result<Vec<BackupSnapshotRecord>
         };
 
         backups.push(BackupSnapshotRecord {
-            created_at: envelope.created_at,
+            created_at,
             id: entry.file_name().to_string_lossy().to_string(),
-            kind: envelope.kind,
+            kind,
             path: path.to_string_lossy().to_string(),
             size_bytes: metadata.len(),
         });
@@ -877,19 +1036,27 @@ fn prune_old_backups(backup_dir: &Path) -> Result<(), String> {
             continue;
         }
 
-        let contents = match fs::read_to_string(&path) {
+        let contents = match fs::read(&path) {
             Ok(contents) => contents,
             Err(_) => continue,
         };
-        let envelope = match serde_json::from_str::<BackupEnvelope>(&contents) {
-            Ok(envelope) => envelope,
-            Err(_) => continue,
+        let (created_at, kind) = if let Some(metadata) = inspect_protected_metadata(&contents) {
+            let (Some(created_at), Some(kind)) = (metadata.created_at, metadata.kind) else {
+                continue;
+            };
+            (created_at, kind)
+        } else {
+            let envelope = match serde_json::from_slice::<BackupEnvelope>(&contents) {
+                Ok(envelope) => envelope,
+                Err(_) => continue,
+            };
+            (envelope.created_at, envelope.kind)
         };
 
-        if envelope.kind == "automatic" {
-            automatic.push((envelope.created_at, path));
-        } else if envelope.kind == "manual" {
-            manual.push((envelope.created_at, path));
+        if kind == "automatic" {
+            automatic.push((created_at, path));
+        } else if kind == "manual" {
+            manual.push((created_at, path));
         }
     }
 
@@ -979,9 +1146,9 @@ mod tests {
         assert_eq!(background.kind, "automatic");
         assert_eq!(background.state.standard_hourly_rate, 475);
 
-        let current = write_external_backup(&export_dir, &state, false)
+        let current = write_external_backup(&test_dir, &export_dir, &state, false)
             .expect("write current external backup");
-        let timestamped = write_external_backup(&export_dir, &state, true)
+        let timestamped = write_external_backup(&test_dir, &export_dir, &state, true)
             .expect("write timestamped external backup");
         assert_eq!(
             current.file_name().and_then(|name| name.to_str()),

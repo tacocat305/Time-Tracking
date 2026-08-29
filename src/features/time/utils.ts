@@ -36,10 +36,10 @@ export const DEFAULT_TASK_CATEGORY_OPTIONS = [
 export const DEFAULT_STATEMENT_PROFILE: StatementProfile = {
   firmName: "Krewson Law LLC",
   footerNote: "Thank you for the opportunity to support this matter.",
-  senderAddress: "",
+  senderAddress: "31918 Walker Rd\nAvon Lake, OH 44012",
   senderEmail: "",
-  senderName: "",
-  senderPhone: "",
+  senderName: "Patricia Krewson",
+  senderPhone: "216.210.4131",
   senderTitle: "Employment Law & HR Consulting",
 };
 

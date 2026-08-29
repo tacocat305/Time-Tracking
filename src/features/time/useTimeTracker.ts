@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   buildMatterSummaries,
   buildBillingCandidates,
+  buildNextInvoiceNumber,
   getInvoiceBalance,
   reconcileInvoicePayments,
   type BillingCandidate,
@@ -41,17 +42,24 @@ import type {
 } from "./types";
 import {
   chooseBackupExportDirectory,
+  configureTrackerSecurity,
   createTrackerBackup,
   exportTrackerBackup,
+  getStorageSecurityStatus,
   hydrateTrackerState,
   listTrackerBackups,
   loadInitialTrackerState,
+  lockTrackerStorage,
   persistTrackerState,
   restoreTrackerBackup,
   shouldHydrateTrackerState,
+  unlockTrackerStorage,
+  verifyTrackerBackup,
+  type BackupVerificationResponse,
 } from "./persistence";
 import {
   buildMatterBreakdown,
+  createDefaultTrackerState,
   createId,
   DEFAULT_TASK_CATEGORY_OPTIONS,
   formatCurrency,
@@ -101,6 +109,7 @@ export interface UseTimeTrackerResult {
   standardHourlyRate: number;
   statementProfile: StatementProfile;
   supportsDesktopBackups: boolean;
+  securityStatus: "checking" | "unconfigured" | "locked" | "unlocked";
   persistenceStatus: "loading" | "saving" | "saved" | "error";
   persistenceError: string | null;
   todayEntries: TimeEntry[];
@@ -109,6 +118,7 @@ export interface UseTimeTrackerResult {
   addExpense: (input: ExpenseRecordInput) => string;
   attachExpenseReceipt: (expenseId: string) => Promise<boolean>;
   createManualBackup: () => Promise<boolean>;
+  enableLocalProtection: (passphrase: string) => Promise<boolean>;
   configureBackupExportDirectory: () => Promise<string | null>;
   exportBackupNow: () => Promise<string | null>;
   exportExpensesCsv: (taxYear: number | null) => Promise<string | null>;
@@ -139,6 +149,10 @@ export interface UseTimeTrackerResult {
   updateClient: (client: ClientRecord) => void;
   updateEntry: (entry: TimeEntry) => boolean;
   updateInvoiceNotes: (invoiceId: string, notes: string) => void;
+  updateInvoiceMetadata: (
+    invoiceId: string,
+    metadata: Pick<InvoiceRecord, "issuedOn" | "statementNumber">
+  ) => boolean;
   attachExpenseToInvoice: (invoiceId: string, expenseId: string) => void;
   detachExpenseFromInvoice: (invoiceId: string, expenseId: string) => void;
   updateInvoiceStatementExport: (
@@ -158,6 +172,11 @@ export interface UseTimeTrackerResult {
     delivery: Omit<InvoiceDeliveryRecord, "id" | "sentAt">
   ) => void;
   restoreBackupSnapshot: (backupId: string) => Promise<boolean>;
+  verifyBackupSnapshot: (
+    backupId: string
+  ) => Promise<BackupVerificationResponse | null>;
+  unlockWorkspace: (passphrase: string) => Promise<boolean>;
+  lockWorkspace: () => Promise<boolean>;
 }
 
 export function useTimeTracker(): UseTimeTrackerResult {
@@ -175,6 +194,9 @@ export function useTimeTracker(): UseTimeTrackerResult {
     "loading" | "saving" | "saved" | "error"
   >(() => (shouldHydrateTrackerState() ? "loading" : "saved"));
   const [persistenceError, setPersistenceError] = useState<string | null>(null);
+  const [securityStatus, setSecurityStatus] = useState<
+    "checking" | "unconfigured" | "locked" | "unlocked"
+  >(() => (shouldHydrateTrackerState() ? "checking" : "unconfigured"));
   const now = new Date();
 
   useEffect(() => {
@@ -184,27 +206,38 @@ export function useTimeTracker(): UseTimeTrackerResult {
 
     let isCancelled = false;
 
-    void hydrateTrackerState().then(
-      async ({ error, mode, state: hydratedState }) => {
-        if (isCancelled) {
-          return;
-        }
+    void getStorageSecurityStatus().then(async (status) => {
+      if (isCancelled) {
+        return;
+      }
 
-        setState(hydratedState);
-        setPersistenceMode(mode);
-        setIsHydrated(!error);
-        setPersistenceError(error);
-        setPersistenceStatus(error ? "error" : "saved");
+      if (status.locked) {
+        setSecurityStatus("locked");
+        setPersistenceStatus("saved");
+        setIsHydrated(false);
+        return;
+      }
 
-        if (mode === "tauri") {
-          const backups = await listTrackerBackups();
+      setSecurityStatus(status.configured ? "unlocked" : "unconfigured");
+      const { error, mode, state: hydratedState } = await hydrateTrackerState();
+      if (isCancelled) {
+        return;
+      }
 
-          if (!isCancelled) {
-            setBackupSnapshots(backups);
-          }
+      setState(hydratedState);
+      setPersistenceMode(mode);
+      setIsHydrated(!error);
+      setPersistenceError(error);
+      setPersistenceStatus(error ? "error" : "saved");
+
+      if (mode === "tauri") {
+        const backups = await listTrackerBackups();
+
+        if (!isCancelled) {
+          setBackupSnapshots(backups);
         }
       }
-    );
+    });
 
     return () => {
       isCancelled = true;
@@ -377,6 +410,7 @@ export function useTimeTracker(): UseTimeTrackerResult {
     standardHourlyRate: state.standardHourlyRate,
     statementProfile: state.statementProfile,
     supportsDesktopBackups: persistenceMode === "tauri",
+    securityStatus,
     persistenceError,
     persistenceStatus,
     todayEntries,
@@ -488,6 +522,17 @@ export function useTimeTracker(): UseTimeTrackerResult {
 
       return true;
     },
+    async enableLocalProtection(passphrase) {
+      const configured = await configureTrackerSecurity(state, passphrase);
+      if (!configured) {
+        return false;
+      }
+      setSecurityStatus("unlocked");
+      setBackupSnapshots(await listTrackerBackups());
+      setPersistenceError(null);
+      setPersistenceStatus("saved");
+      return true;
+    },
     async exportBackupNow() {
       const directory = state.appPreferences.backupExportDirectory;
       if (!directory) {
@@ -514,6 +559,7 @@ export function useTimeTracker(): UseTimeTrackerResult {
       }
 
       const invoiceId = createId();
+      const issuedOn = getLocalDateKey(new Date());
 
       setState((current) => {
         const existingInvoice = current.invoices.find(
@@ -539,7 +585,7 @@ export function useTimeTracker(): UseTimeTrackerResult {
           deliveries: [],
           excludedExpenseIds: [],
           id: invoiceId,
-          issuedOn: getLocalDateKey(new Date()),
+          issuedOn,
           lineItems: candidate.lineItems.map((lineItem) => ({ ...lineItem })),
           matterSummaries: candidate.matterSummaries.map((matter) => ({
             ...matter,
@@ -552,7 +598,7 @@ export function useTimeTracker(): UseTimeTrackerResult {
           reviewedCount: candidate.reviewedCount,
           statementExportedAt: null,
           statementPdfPath: null,
-          statementNumber: candidate.statementNumber,
+          statementNumber: buildNextInvoiceNumber(current.invoices, issuedOn),
           status: "draft",
           totalAmount: candidate.totalAmount,
           totalBilledMinutes: candidate.totalBilledMinutes,
@@ -1010,17 +1056,23 @@ export function useTimeTracker(): UseTimeTrackerResult {
       });
     },
     toggleEntryReviewed(entryId) {
-      setState((current) => ({
-        ...current,
-        entries: current.entries.map((entry) =>
-          entry.id === entryId
-            ? {
-                ...entry,
-                reviewedAt: entry.reviewedAt ? null : new Date().toISOString(),
-              }
-            : entry
-        ),
-      }));
+      setState((current) =>
+        isLineItemLinked(current.invoices, entryId, "time")
+          ? current
+          : {
+              ...current,
+              entries: current.entries.map((entry) =>
+                entry.id === entryId
+                  ? {
+                      ...entry,
+                      reviewedAt: entry.reviewedAt
+                        ? null
+                        : new Date().toISOString(),
+                    }
+                  : entry
+              ),
+            }
+      );
     },
     updateActiveTimer(draft) {
       setState((current) => {
@@ -1238,6 +1290,41 @@ export function useTimeTracker(): UseTimeTrackerResult {
         ),
       }));
     },
+    updateInvoiceMetadata(invoiceId, metadata) {
+      const statementNumber = metadata.statementNumber.trim();
+      const isDuplicate = state.invoices.some(
+        (invoice) =>
+          invoice.id !== invoiceId &&
+          invoice.statementNumber.toLocaleLowerCase() ===
+            statementNumber.toLocaleLowerCase()
+      );
+      const invoice = state.invoices.find((record) => record.id === invoiceId);
+      if (
+        !invoice ||
+        invoice.status !== "draft" ||
+        !statementNumber ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(metadata.issuedOn) ||
+        isDuplicate
+      ) {
+        return false;
+      }
+
+      setState((current) => ({
+        ...current,
+        invoices: current.invoices.map((record) =>
+          record.id === invoiceId && record.status === "draft"
+            ? {
+                ...record,
+                issuedOn: metadata.issuedOn,
+                statementExportedAt: null,
+                statementNumber,
+                statementPdfPath: null,
+              }
+            : record
+        ),
+      }));
+      return true;
+    },
     updateInvoiceStatementExport(
       invoiceId,
       statementPdfPath,
@@ -1390,6 +1477,45 @@ export function useTimeTracker(): UseTimeTrackerResult {
       setIsHydrated(true);
 
       return true;
+    },
+    async verifyBackupSnapshot(backupId) {
+      return await verifyTrackerBackup(backupId);
+    },
+    async unlockWorkspace(passphrase) {
+      const unlocked = await unlockTrackerStorage(passphrase);
+      if (!unlocked) {
+        return false;
+      }
+      const { error, mode, state: hydratedState } = await hydrateTrackerState();
+      if (error) {
+        setPersistenceError(error);
+        setPersistenceStatus("error");
+        return false;
+      }
+      setState(hydratedState);
+      setPersistenceMode(mode);
+      setBackupSnapshots(await listTrackerBackups());
+      setIsHydrated(true);
+      setPersistenceError(null);
+      setPersistenceStatus("saved");
+      setSecurityStatus("unlocked");
+      return true;
+    },
+    async lockWorkspace() {
+      const saved = await persistTrackerState(state, persistenceMode);
+      const locked = await lockTrackerStorage();
+      if (!locked) {
+        setPersistenceError(saved.error);
+        setPersistenceStatus(saved.error ? "error" : "saved");
+        return false;
+      }
+      setIsHydrated(false);
+      setState(createDefaultTrackerState());
+      setBackupSnapshots([]);
+      setPersistenceError(saved.error);
+      setPersistenceStatus(saved.error ? "error" : "saved");
+      setSecurityStatus("locked");
+      return !saved.error;
     },
   };
 }

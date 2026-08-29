@@ -1,13 +1,16 @@
 mod email;
 mod expenses;
 mod native_dialog;
+mod security;
 mod statements;
 mod storage;
 
+use security::{get_storage_security_status, lock_storage, unlock_storage};
 use statements::{export_invoice_pdf, open_invoice_pdf, reveal_invoice_pdf};
 use storage::{
-    choose_backup_export_directory, create_tracker_backup, export_tracker_backup,
-    list_tracker_backups, load_tracker_state, restore_tracker_backup, save_tracker_state,
+    choose_backup_export_directory, configure_tracker_security, create_tracker_backup,
+    export_tracker_backup, list_tracker_backups, load_tracker_state, restore_tracker_backup,
+    save_tracker_state, verify_tracker_backup,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -22,12 +25,17 @@ pub fn run() {
             open_expense_receipt,
             remove_expense_receipt,
             create_tracker_backup,
+            configure_tracker_security,
             choose_backup_export_directory,
             export_tracker_backup,
+            get_storage_security_status,
             list_tracker_backups,
             load_tracker_state,
+            lock_storage,
             restore_tracker_backup,
             save_tracker_state,
+            unlock_storage,
+            verify_tracker_backup,
             export_invoice_pdf,
             open_invoice_pdf,
             reveal_invoice_pdf

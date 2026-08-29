@@ -6,7 +6,10 @@ The **Windows tester installer** workflow runs automatically on pushes to
 `main` and can also be started manually. It runs the full frontend and Rust
 checks on a native Windows runner, builds NSIS and MSI installers, launches the
 compiled application for five seconds, and uploads the installers as the
-`legal-time-tracker-windows-testers` artifact.
+`legal-time-tracker-windows-testers` artifact. A version tag such as `v0.9.0`
+also publishes those verified files, plus `SHA256SUMS.txt`, as a GitHub
+prerelease. The release body is sourced from
+[`windows-installation.md`](./windows-installation.md).
 
 This build is appropriate for private testing. Windows will identify it as an
 unknown publisher until a code-signing certificate is added. A tester may need
@@ -19,6 +22,10 @@ The `.msi` is also included for managed or administrative installation.
 
 The Windows release gate runs in `.github/workflows/windows-release.yml` on a native `windows-latest` runner. It runs frontend and Rust checks, imports the signing certificate, builds NSIS and MSI installers, verifies every Authenticode signature, starts the compiled application for five seconds, and uploads the verified installers.
 
+Signed builds run manually or from tags matching `signed-v*`. This keeps an
+unsigned tester tag from accidentally failing or being represented as a signed
+release.
+
 ## Required secrets
 
 - `WINDOWS_CERTIFICATE`: Base64-encoded contents of the code-signing `.pfx` certificate.
@@ -28,7 +35,7 @@ The Windows release gate runs in `.github/workflows/windows-release.yml` on a na
 
 1. Create or connect the project to a private GitHub repository.
 2. Add both required repository secrets.
-3. Run the **Windows signed release** workflow manually, or push a version tag such as `v0.1.0`.
+3. Run the **Windows signed release** workflow manually, or push a tag such as `signed-v0.9.0`.
 4. Download the `legal-time-tracker-windows-signed` artifact only after the `Verify signatures and launch the built app` step passes.
 
 An installer produced without the verification step is not considered a tested release artifact.

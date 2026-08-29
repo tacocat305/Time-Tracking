@@ -19,7 +19,11 @@ import {
 } from "@/features/billing/email";
 import { InvoicePayments } from "@/features/billing/InvoicePayments";
 import { TimeEntryDialog } from "@/features/dashboard/TodayScreen";
-import type { InvoiceLineItem, InvoiceRecord } from "@/features/time/types";
+import type {
+  InvoiceLineItem,
+  InvoiceRecord,
+  StatementProfile,
+} from "@/features/time/types";
 import type { UseTimeTrackerResult } from "@/features/time/useTimeTracker";
 import { formatCurrency, formatHours } from "@/features/time/utils";
 import { PageHeader } from "@/shared/ui/PageHeader";
@@ -85,6 +89,9 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
         ) ?? null)
       : null;
   const selectedInvoiceLocked = selectedInvoice?.status === "paid";
+  const selectedInvoiceIssues = selectedInvoice
+    ? getInvoiceReadinessIssues(selectedInvoice, tracker.statementProfile)
+    : [];
   const preview = selectedInvoice
     ? buildPreviewFromInvoice(selectedInvoice)
     : selectedCandidate;
@@ -170,6 +177,18 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
   }
 
   async function handleExportInvoice(invoice: InvoiceRecord) {
+    const readinessIssues = getInvoiceReadinessIssues(
+      invoice,
+      tracker.statementProfile
+    );
+    if (readinessIssues.length > 0) {
+      setExportState({
+        message: `Complete the invoice before export: ${readinessIssues.join("; ")}.`,
+        tone: "danger",
+      });
+      return;
+    }
+
     setIsExporting(true);
     setExportState(null);
 
@@ -224,6 +243,18 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
   }
 
   async function handleSendInvoice(invoice: InvoiceRecord) {
+    const readinessIssues = getInvoiceReadinessIssues(
+      invoice,
+      tracker.statementProfile
+    );
+    if (readinessIssues.length > 0) {
+      setExportState({
+        message: `Complete the invoice before sending: ${readinessIssues.join("; ")}.`,
+        tone: "danger",
+      });
+      return;
+    }
+
     const recipient = invoice.contactEmail.trim();
     if (!recipient) {
       setExportState({
@@ -288,6 +319,24 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
     } finally {
       setIsSendingEmail(false);
     }
+  }
+
+  function handleInvoiceMetadataSubmit(
+    event: React.FormEvent<HTMLFormElement>,
+    invoice: InvoiceRecord
+  ) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const updated = tracker.updateInvoiceMetadata(invoice.id, {
+      issuedOn: `${formData.get("issuedOn") ?? ""}`,
+      statementNumber: `${formData.get("statementNumber") ?? ""}`,
+    });
+    setExportState({
+      message: updated
+        ? "Invoice number and issue date saved. Export a new PDF to reflect the change."
+        : "Use a unique invoice number and a valid issue date. Only draft invoices can be changed.",
+      tone: updated ? "success" : "danger",
+    });
   }
 
   return (
@@ -599,6 +648,44 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
 
               {selectedInvoice ? (
                 <div className="billing-history-controls">
+                  <form
+                    key={selectedInvoice.id}
+                    className="billing-invoice-metadata"
+                    onSubmit={(event) =>
+                      handleInvoiceMetadataSubmit(event, selectedInvoice)
+                    }
+                  >
+                    <label className="field">
+                      <span className="field-label">Invoice number</span>
+                      <input
+                        className="text-input"
+                        defaultValue={selectedInvoice.statementNumber}
+                        disabled={selectedInvoice.status !== "draft"}
+                        maxLength={40}
+                        name="statementNumber"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="field-label">Issue date</span>
+                      <input
+                        className="text-input"
+                        defaultValue={selectedInvoice.issuedOn}
+                        disabled={selectedInvoice.status !== "draft"}
+                        name="issuedOn"
+                        required
+                        type="date"
+                      />
+                    </label>
+                    <button
+                      className="button-secondary"
+                      disabled={selectedInvoice.status !== "draft"}
+                      type="submit"
+                    >
+                      Save invoice details
+                    </button>
+                  </form>
+
                   <label className="field">
                     <span className="field-label">Invoice status</span>
                     <select
@@ -692,11 +779,33 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
 
               {selectedInvoice ? (
                 <div className="billing-export-stack">
+                  {selectedInvoiceIssues.length > 0 ? (
+                    <div
+                      className="billing-export-status"
+                      data-tone="danger"
+                      role="status"
+                    >
+                      <strong>Invoice needs attention before export.</strong>
+                      <span>{selectedInvoiceIssues.join(" · ")}</span>
+                    </div>
+                  ) : (
+                    <div
+                      className="billing-export-status"
+                      data-tone="success"
+                      role="status"
+                    >
+                      Invoice details are complete and ready for PDF export.
+                    </div>
+                  )}
                   <div className="button-row">
                     <button
                       type="button"
                       className="button-primary"
-                      disabled={!desktopExportAvailable || isExporting}
+                      disabled={
+                        !desktopExportAvailable ||
+                        isExporting ||
+                        selectedInvoiceIssues.length > 0
+                      }
                       onClick={() => handleExportInvoice(selectedInvoice)}
                     >
                       {desktopExportAvailable
@@ -736,7 +845,8 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
                       disabled={
                         !desktopEmailAvailable ||
                         isSendingEmail ||
-                        !selectedInvoice.contactEmail
+                        !selectedInvoice.contactEmail ||
+                        selectedInvoiceIssues.length > 0
                       }
                       type="button"
                       onClick={() => handleSendInvoice(selectedInvoice)}
@@ -1188,6 +1298,32 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
       ) : null}
     </div>
   );
+}
+
+function getInvoiceReadinessIssues(
+  invoice: InvoiceRecord,
+  profile: StatementProfile
+) {
+  const issues: string[] = [];
+  if (!invoice.statementNumber.trim()) issues.push("Add an invoice number");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(invoice.issuedOn)) {
+    issues.push("Add a valid issue date");
+  }
+  if (!invoice.clientName.trim()) issues.push("Add the client name");
+  if (!invoice.clientAddress.trim()) {
+    issues.push("Add the client's billing address and refresh the draft");
+  }
+  if (invoice.lineItems.length === 0) issues.push("Add at least one line item");
+  if (invoice.totalAmount <= 0) issues.push("Invoice total must be positive");
+  if (!profile.firmName.trim())
+    issues.push("Complete the firm name in Settings");
+  if (!profile.senderPhone.trim()) {
+    issues.push("Complete the firm phone in Settings");
+  }
+  if (!profile.senderAddress.trim()) {
+    issues.push("Complete the firm address in Settings");
+  }
+  return issues;
 }
 
 function buildDeleteSourceSummary(candidate: BillingCandidate) {

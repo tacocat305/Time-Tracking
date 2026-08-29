@@ -22,16 +22,21 @@ type SettingsScreenProps = {
     UseTimeTrackerResult,
     | "appPreferences"
     | "backupSnapshots"
+    | "clientRecords"
     | "configureBackupExportDirectory"
     | "createManualBackup"
+    | "enableLocalProtection"
     | "exportBackupNow"
+    | "lockWorkspace"
     | "refreshBackupSnapshots"
     | "restoreBackupSnapshot"
+    | "securityStatus"
     | "statementProfile"
     | "standardHourlyRate"
     | "supportsDesktopBackups"
     | "updateStatementProfile"
     | "updateStandardHourlyRate"
+    | "verifyBackupSnapshot"
   >;
 };
 
@@ -49,13 +54,21 @@ export function SettingsScreen({
   const [backupMessageTone, setBackupMessageTone] = useState<
     "success" | "danger"
   >("success");
+  const [securityMessage, setSecurityMessage] = useState<string | null>(null);
+  const [securityMessageTone, setSecurityMessageTone] = useState<
+    "success" | "danger"
+  >("success");
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [isConfiguringBackupExport, setIsConfiguringBackupExport] =
     useState(false);
   const [isExportingBackup, setIsExportingBackup] = useState(false);
   const [isThemeLibraryOpen, setIsThemeLibraryOpen] = useState(false);
   const [isRefreshingBackups, setIsRefreshingBackups] = useState(false);
+  const [isSecuringWorkspace, setIsSecuringWorkspace] = useState(false);
   const [restoringBackupId, setRestoringBackupId] = useState<string | null>(
+    null
+  );
+  const [verifyingBackupId, setVerifyingBackupId] = useState<string | null>(
     null
   );
 
@@ -190,6 +203,59 @@ export function SettingsScreen({
     }
   }
 
+  async function handleEnableProtection(
+    event: React.FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const passphrase = `${data.get("passphrase") ?? ""}`;
+    const confirmation = `${data.get("passphraseConfirmation") ?? ""}`;
+    if (passphrase.length < 10) {
+      setSecurityMessageTone("danger");
+      setSecurityMessage("Use a passphrase with at least 10 characters.");
+      return;
+    }
+    if (passphrase !== confirmation) {
+      setSecurityMessageTone("danger");
+      setSecurityMessage("The passphrase confirmation does not match.");
+      return;
+    }
+
+    setIsSecuringWorkspace(true);
+    setSecurityMessage(null);
+    try {
+      const secured = await tracker.enableLocalProtection(passphrase);
+      setSecurityMessageTone(secured ? "success" : "danger");
+      setSecurityMessage(
+        secured
+          ? "Local records and backups are now encrypted. The workspace will lock after 15 minutes of inactivity."
+          : "Unable to enable local protection. No records were removed."
+      );
+      if (secured) {
+        form.reset();
+      }
+    } finally {
+      setIsSecuringWorkspace(false);
+    }
+  }
+
+  async function handleVerifyBackup(backupId: string) {
+    setVerifyingBackupId(backupId);
+    setBackupMessage(null);
+    try {
+      const result = await tracker.verifyBackupSnapshot(backupId);
+      setBackupMessageTone(result?.valid ? "success" : "danger");
+      setBackupMessage(
+        result?.valid
+          ? `${result.message} It contains ${result.entryCount} time entries, ${result.clientCount} clients, ${result.expenseCount} expenses, and ${result.invoiceCount} invoices.`
+          : "The backup could not be decrypted and validated."
+      );
+    } finally {
+      setVerifyingBackupId(null);
+    }
+  }
+
   const statementPreviewLines = [
     tracker.statementProfile.firmName,
     tracker.statementProfile.senderName,
@@ -209,6 +275,125 @@ export function SettingsScreen({
         title="Settings"
         description="Seasonal themes, statement branding, and local backup behaviors all belong here. Summer Light remains the default starting point."
       />
+
+      <Panel
+        title="Privacy and access"
+        description="Protect client narratives and billing records with a local passphrase. Encryption applies to the state file, local snapshots, and synced-folder backups."
+        actionLabel={
+          tracker.securityStatus === "unlocked"
+            ? "Encrypted"
+            : "Protection recommended"
+        }
+      >
+        {tracker.securityStatus === "unlocked" ? (
+          <div className="settings-security-status">
+            <div>
+              <div className="eyebrow">Protection active</div>
+              <h3 className="records-section-title">Workspace encrypted</h3>
+              <p className="records-section-copy">
+                Records are decrypted only after launch-time unlock and are
+                removed from app memory when manually locked or after 15 minutes
+                without activity.
+              </p>
+            </div>
+            <button
+              className="button-secondary"
+              type="button"
+              onClick={() => void tracker.lockWorkspace()}
+            >
+              Lock now
+            </button>
+          </div>
+        ) : (
+          <form
+            className="settings-protection-form"
+            onSubmit={handleEnableProtection}
+          >
+            <div className="settings-backup-note" data-tone="warning">
+              This passphrase cannot be recovered. Store it in a trusted
+              password manager before enabling protection; losing it means
+              encrypted records and backups cannot be opened.
+            </div>
+            <div className="field-grid">
+              <label className="field">
+                <span className="field-label">New passphrase</span>
+                <input
+                  autoComplete="new-password"
+                  className="text-input"
+                  disabled={
+                    !tracker.supportsDesktopBackups || isSecuringWorkspace
+                  }
+                  minLength={10}
+                  name="passphrase"
+                  required
+                  type="password"
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">Confirm passphrase</span>
+                <input
+                  autoComplete="new-password"
+                  className="text-input"
+                  disabled={
+                    !tracker.supportsDesktopBackups || isSecuringWorkspace
+                  }
+                  minLength={10}
+                  name="passphraseConfirmation"
+                  required
+                  type="password"
+                />
+              </label>
+            </div>
+            <div className="button-row">
+              <button
+                className="button-primary"
+                disabled={
+                  !tracker.supportsDesktopBackups || isSecuringWorkspace
+                }
+                type="submit"
+              >
+                {isSecuringWorkspace
+                  ? "Encrypting records..."
+                  : "Enable local protection"}
+              </button>
+            </div>
+          </form>
+        )}
+        {securityMessage ? (
+          <div
+            className="billing-export-status"
+            data-tone={securityMessageTone}
+            role="status"
+          >
+            {securityMessage}
+          </div>
+        ) : null}
+      </Panel>
+
+      <Panel
+        title="Professional rollout"
+        description="Complete these local safeguards before making this the primary time record for another user."
+        actionLabel="Readiness check"
+      >
+        <div className="settings-readiness-grid">
+          <ReadinessItem
+            complete={tracker.securityStatus === "unlocked"}
+            label="Local encryption enabled"
+          />
+          <ReadinessItem
+            complete={Boolean(tracker.appPreferences.backupExportDirectory)}
+            label="Off-device backup folder connected"
+          />
+          <ReadinessItem
+            complete={tracker.backupSnapshots.length > 0}
+            label="At least one local snapshot created"
+          />
+          <ReadinessItem
+            complete={tracker.clientRecords.length > 0}
+            label="Client and billing profile configured"
+          />
+        </div>
+      </Panel>
 
       <Panel
         title="Theme library"
@@ -574,6 +759,19 @@ export function SettingsScreen({
                           ? "Restoring..."
                           : "Restore this backup"}
                       </button>
+                      <button
+                        className="button-secondary"
+                        disabled={
+                          !tracker.supportsDesktopBackups ||
+                          verifyingBackupId === snapshot.id
+                        }
+                        type="button"
+                        onClick={() => handleVerifyBackup(snapshot.id)}
+                      >
+                        {verifyingBackupId === snapshot.id
+                          ? "Verifying..."
+                          : "Verify without restoring"}
+                      </button>
                     </div>
                   </article>
                 ))}
@@ -699,6 +897,21 @@ export function SettingsScreen({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ReadinessItem({
+  complete,
+  label,
+}: {
+  complete: boolean;
+  label: string;
+}) {
+  return (
+    <div className="settings-readiness-item" data-complete={complete}>
+      <span aria-hidden="true">{complete ? "✓" : "○"}</span>
+      <strong>{label}</strong>
     </div>
   );
 }

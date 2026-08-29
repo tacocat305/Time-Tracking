@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildNextInvoiceNumber,
   getInvoiceAmountPaid,
   getInvoiceBalance,
   reconcileInvoicePayments,
@@ -50,6 +51,20 @@ const payment = (
 });
 
 describe("invoice payment reconciliation", () => {
+  it("assigns the next reference-style invoice sequence for the issue year", () => {
+    expect(buildNextInvoiceNumber([], "2026-08-27")).toBe("26-001");
+    expect(
+      buildNextInvoiceNumber(
+        [
+          { ...invoice(), statementNumber: "26-006" },
+          { ...invoice(), id: "invoice-2", statementNumber: "25-014" },
+          { ...invoice(), id: "invoice-3", statementNumber: "LTT-legacy" },
+        ],
+        "2026-08-27"
+      )
+    ).toBe("26-007");
+  });
+
   it("tracks a partial payment without marking the invoice paid", () => {
     const reconciled = reconcileInvoicePayments(invoice(), [
       payment("payment-1", 250, "2026-07-10"),

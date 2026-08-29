@@ -7,6 +7,7 @@ import { MonthScreen } from "@/features/dashboard/MonthScreen";
 import { TodayScreen } from "@/features/dashboard/TodayScreen";
 import { WeekScreen } from "@/features/dashboard/WeekScreen";
 import { ExpensesScreen } from "@/features/expenses/ExpensesScreen";
+import { LockScreen } from "@/features/security/LockScreen";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import type { TimerDraft } from "@/features/time/types";
 import { useTimeTracker } from "@/features/time/useTimeTracker";
@@ -26,6 +27,7 @@ function App() {
   const [timerNow, setTimerNow] = useState(Date.now);
   const mainRef = useRef<HTMLDivElement>(null);
   const tracker = useTimeTracker();
+  const lockWorkspaceRef = useRef(tracker.lockWorkspace);
   const themeName = (
     tracker.appPreferences.themeName in themeDefinitions
       ? tracker.appPreferences.themeName
@@ -42,6 +44,10 @@ function App() {
   );
 
   useEffect(() => {
+    lockWorkspaceRef.current = tracker.lockWorkspace;
+  }, [tracker.lockWorkspace]);
+
+  useEffect(() => {
     if (mainRef.current) {
       mainRef.current.scrollLeft = 0;
       mainRef.current.scrollTop = 0;
@@ -56,6 +62,61 @@ function App() {
     const interval = window.setInterval(() => setTimerNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, [tracker.activeTimer]);
+
+  useEffect(() => {
+    if (tracker.securityStatus !== "unlocked") {
+      return;
+    }
+
+    let timeout = window.setTimeout(
+      () => {
+        void lockWorkspaceRef.current();
+      },
+      15 * 60 * 1000
+    );
+    const resetTimeout = () => {
+      window.clearTimeout(timeout);
+      timeout = window.setTimeout(
+        () => {
+          void lockWorkspaceRef.current();
+        },
+        15 * 60 * 1000
+      );
+    };
+    const events: (keyof WindowEventMap)[] = [
+      "focus",
+      "keydown",
+      "pointerdown",
+    ];
+    events.forEach((eventName) =>
+      window.addEventListener(eventName, resetTimeout)
+    );
+    return () => {
+      window.clearTimeout(timeout);
+      events.forEach((eventName) =>
+        window.removeEventListener(eventName, resetTimeout)
+      );
+    };
+  }, [tracker.securityStatus]);
+
+  if (
+    tracker.securityStatus === "checking" ||
+    tracker.securityStatus === "locked"
+  ) {
+    return (
+      <div
+        className="app-shell security-shell"
+        data-mode={appearance.colorMode}
+        data-theme={appearance.themeName}
+        style={themeStyle}
+      >
+        <LockScreen
+          checking={tracker.securityStatus === "checking"}
+          onUnlock={tracker.unlockWorkspace}
+        />
+      </div>
+    );
+  }
 
   const elapsedSeconds = tracker.activeTimer
     ? Math.max(
@@ -137,7 +198,35 @@ function App() {
                 : "00:00:00"}
             </span>
           </button>
+          {tracker.securityStatus === "unlocked" ? (
+            <button
+              className="topbar-lock-button"
+              type="button"
+              onClick={() => void tracker.lockWorkspace()}
+            >
+              Lock workspace
+            </button>
+          ) : null}
         </header>
+
+        {tracker.persistenceStatus === "error" ? (
+          <section className="persistence-error-banner" role="alert">
+            <div>
+              <strong>Changes are not being saved</strong>
+              <span>
+                {tracker.persistenceError ??
+                  "Local storage reported an unexpected error."}
+              </span>
+            </div>
+            <button
+              className="button-secondary"
+              type="button"
+              onClick={() => setActiveScreen("settings")}
+            >
+              Open backup settings
+            </button>
+          </section>
+        ) : null}
 
         {activeScreen === "today" &&
         tracker.persistenceStatus !== "loading" &&

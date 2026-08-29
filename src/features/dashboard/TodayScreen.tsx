@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type { ManualEntryInput, TimeEntry } from "@/features/time/types";
 import type { UseTimeTrackerResult } from "@/features/time/useTimeTracker";
@@ -24,7 +24,16 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
   const [manualDraft, setManualDraft] = useState<ManualEntryDraft>(
     createInitialManualEntry
   );
+  const [manualMessage, setManualMessage] = useState<{
+    text: string;
+    tone: "danger" | "success";
+  } | null>(null);
+  const [confirmedDuplicate, setConfirmedDuplicate] = useState<string | null>(
+    null
+  );
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const manualFormRef = useRef<HTMLFormElement>(null);
+  const hoursInputRef = useRef<HTMLInputElement>(null);
   const manualMatters = tracker.getMattersForClient(manualDraft.clientId);
   const editingEntry =
     tracker.todayEntries.find((entry) => entry.id === editingEntryId) ?? null;
@@ -39,6 +48,10 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
     value: ManualEntryDraft[K]
   ) {
     setManualDraft((current) => ({ ...current, [field]: value }));
+    setConfirmedDuplicate(null);
+    setManualMessage((current) =>
+      current?.tone === "danger" ? null : current
+    );
   }
 
   function handleActiveTimerClientSelect(clientId: string) {
@@ -84,20 +97,28 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
       tracker.clientRecords.find((client) => client.id === clientId) ?? null;
 
     setManualDraft((current) => {
+      const clientMatters = tracker.getMattersForClient(clientId);
       const shouldKeepMatter =
         current.matterId &&
-        tracker
-          .getMattersForClient(clientId)
-          .some((matter) => matter.id === current.matterId);
+        clientMatters.some((matter) => matter.id === current.matterId);
+      const nextMatter = shouldKeepMatter
+        ? clientMatters.find((matter) => matter.id === current.matterId)
+        : clientMatters.length === 1
+          ? clientMatters[0]
+          : null;
 
       return {
         ...current,
         clientId: selectedClient?.id ?? null,
         clientName: selectedClient?.name ?? "",
-        matterId: shouldKeepMatter ? current.matterId : null,
-        matterName: shouldKeepMatter ? current.matterName : "",
+        matterId: nextMatter?.id ?? null,
+        matterName: nextMatter?.name ?? "",
+        taskCategory:
+          current.taskCategory || nextMatter?.defaultTaskCategory || "",
       };
     });
+    setManualMessage(null);
+    setConfirmedDuplicate(null);
   }
 
   function handleManualMatterSelect(matterId: string) {
@@ -118,13 +139,39 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
       taskCategory:
         current.taskCategory || selectedMatter?.defaultTaskCategory || "",
     }));
+    setManualMessage(null);
+    setConfirmedDuplicate(null);
   }
 
   function handleManualSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const billedHours = Number(manualDraft.billedHours);
-    if (!Number.isFinite(billedHours) || billedHours <= 0) {
+    const validationMessage = validateManualEntry(manualDraft, billedHours);
+    if (validationMessage) {
+      setManualMessage({ text: validationMessage, tone: "danger" });
+      return;
+    }
+
+    const duplicateSignature = buildManualEntrySignature(
+      manualDraft,
+      billedHours
+    );
+    const duplicateExists = tracker.entries.some(
+      (entry) =>
+        entry.workDate === manualDraft.workDate &&
+        entry.clientId === manualDraft.clientId &&
+        entry.matterId === manualDraft.matterId &&
+        entry.billedMinutes === Math.round(billedHours * 60) &&
+        entry.narrative.trim().toLocaleLowerCase() ===
+          manualDraft.narrative.trim().toLocaleLowerCase()
+    );
+    if (duplicateExists && confirmedDuplicate !== duplicateSignature) {
+      setConfirmedDuplicate(duplicateSignature);
+      setManualMessage({
+        text: "An identical entry already exists for this date. Review it, then press Save time entry again if a second entry is intentional.",
+        tone: "danger",
+      });
       return;
     }
 
@@ -132,7 +179,50 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
       ...manualDraft,
       billedHours,
     });
-    setManualDraft(createInitialManualEntry());
+    const savedDate = new Date(
+      `${manualDraft.workDate}T12:00:00`
+    ).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    setManualMessage({
+      text: `Saved ${formatDecimalHours(billedHours)} hours to ${manualDraft.clientName} / ${manualDraft.matterName} on ${savedDate}.`,
+      tone: "success",
+    });
+    setConfirmedDuplicate(null);
+    setManualDraft((current) => ({
+      ...current,
+      billedHours: "",
+      narrative: "",
+    }));
+    window.setTimeout(() => hoursInputRef.current?.focus(), 0);
+  }
+
+  function handleManualKeyDown(event: React.KeyboardEvent<HTMLFormElement>) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      manualFormRef.current?.requestSubmit();
+    }
+  }
+
+  function handleUseAsTemplate(entry: TimeEntry) {
+    setManualDraft({
+      billedHours: "",
+      clientId: entry.clientId,
+      clientName: entry.clientName,
+      matterId: entry.matterId,
+      matterName: entry.matterName,
+      narrative: "",
+      taskCategory: entry.taskCategory,
+      workDate: getLocalDateKey(new Date()),
+    });
+    setManualMessage({
+      text: `Loaded ${entry.clientName} / ${entry.matterName}. Enter hours and a new narrative.`,
+      tone: "success",
+    });
+    setConfirmedDuplicate(null);
+    window.setTimeout(() => hoursInputRef.current?.focus(), 0);
   }
 
   return (
@@ -205,12 +295,18 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
             </section>
           ) : null}
 
-          <form className="modern-entry-form" onSubmit={handleManualSubmit}>
+          <form
+            className="modern-entry-form"
+            ref={manualFormRef}
+            onKeyDown={handleManualKeyDown}
+            onSubmit={handleManualSubmit}
+          >
             <label className="field">
               <span className="field-label">Client</span>
               <select
                 className="text-input"
                 name="manual-client"
+                required
                 value={manualDraft.clientId ?? ""}
                 onChange={(event) =>
                   handleManualClientSelect(event.currentTarget.value)
@@ -230,6 +326,7 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
               <select
                 className="text-input"
                 name="manual-matter"
+                required
                 value={manualDraft.matterId ?? ""}
                 onChange={(event) =>
                   handleManualMatterSelect(event.currentTarget.value)
@@ -265,8 +362,11 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
                 <input
                   className="text-input"
                   inputMode="decimal"
+                  maxLength={6}
                   name="manual-billed-hours"
                   pattern="[0-9]*\.?[0-9]+"
+                  placeholder="e.g. .25"
+                  ref={hoursInputRef}
                   required
                   type="text"
                   value={manualDraft.billedHours}
@@ -304,6 +404,8 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
                 className="text-area"
                 name="manual-narrative"
                 placeholder="Describe the work performed..."
+                maxLength={4000}
+                required
                 rows={5}
                 value={manualDraft.narrative}
                 onChange={(event) =>
@@ -318,15 +420,38 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
               </span>
             </label>
 
-            <button
-              aria-label="Save manual entry"
-              className="modern-add-entry-button"
-              type="submit"
-            >
-              <span aria-hidden="true">＋</span>
-              Add entry
-              <kbd>⌘ ↵</kbd>
-            </button>
+            {manualMessage ? (
+              <div
+                className="manual-entry-message"
+                data-tone={manualMessage.tone}
+                role={manualMessage.tone === "danger" ? "alert" : "status"}
+              >
+                {manualMessage.text}
+              </div>
+            ) : null}
+
+            <div className="manual-entry-actions">
+              <button
+                className="button-secondary"
+                type="button"
+                onClick={() => {
+                  setManualDraft(createInitialManualEntry());
+                  setManualMessage(null);
+                  setConfirmedDuplicate(null);
+                }}
+              >
+                Clear
+              </button>
+              <button
+                aria-label="Save manual entry"
+                className="modern-add-entry-button"
+                type="submit"
+              >
+                <span aria-hidden="true">＋</span>
+                Save time entry
+                <kbd>Cmd/Ctrl + Enter</kbd>
+              </button>
+            </div>
           </form>
         </div>
 
@@ -362,6 +487,14 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
                         <span>{entry.matterName || "Unassigned matter"}</span>
                       </div>
                       <div className="activity-entry-actions">
+                        <button
+                          aria-label="Use as new entry template"
+                          className="icon-action"
+                          type="button"
+                          onClick={() => handleUseAsTemplate(entry)}
+                        >
+                          ⧉
+                        </button>
                         <button
                           aria-label={
                             tracker.isEntryLocked(entry.id)
@@ -416,10 +549,15 @@ export function TodayScreen({ tracker }: TodayScreenProps) {
                         }
                         className="activity-review-status"
                         data-reviewed={isReviewed(entry)}
+                        disabled={tracker.isEntryLocked(entry.id)}
                         type="button"
                         onClick={() => tracker.toggleEntryReviewed(entry.id)}
                       >
-                        {isReviewed(entry) ? "Reviewed" : "Needs review"}
+                        {tracker.isEntryLocked(entry.id)
+                          ? "Invoiced"
+                          : isReviewed(entry)
+                            ? "Reviewed"
+                            : "Needs review"}
                       </button>
                       <strong className="activity-hours">
                         <span>{formatHours(entry.billedMinutes)}</span> h
@@ -491,6 +629,8 @@ export function TimeEntryDialog({
   tracker: UseTimeTrackerResult;
 }) {
   const [clientId, setClientId] = useState(entry.clientId ?? "");
+  const [matterId, setMatterId] = useState(entry.matterId ?? "");
+  const [error, setError] = useState<string | null>(null);
   const availableClients = tracker.clientRecords.filter(
     (client) => client.status === "active" || client.id === entry.clientId
   );
@@ -504,22 +644,35 @@ export function TimeEntryDialog({
     const selectedClient = tracker.clientRecords.find(
       (client) => client.id === clientId
     );
-    const matterId = `${formData.get("matterId") ?? ""}`;
     const selectedMatter = tracker.matterRecords.find(
       (matter) => matter.id === matterId
     );
-    const minutes = Math.round(Number(formData.get("billedHours") ?? 0) * 60);
+    const billedHours = Number(formData.get("billedHours") ?? 0);
+    const narrative = `${formData.get("narrative") ?? ""}`.trim();
+    if (!selectedClient || !selectedMatter) {
+      setError("Select both a client and matter before saving.");
+      return;
+    }
+    if (!Number.isFinite(billedHours) || billedHours <= 0 || billedHours > 24) {
+      setError("Enter billable hours greater than 0 and no more than 24.");
+      return;
+    }
+    if (!narrative) {
+      setError("Enter a client-facing narrative before saving.");
+      return;
+    }
+    const minutes = Math.round(billedHours * 60);
 
     const updated = tracker.updateEntry({
       ...entry,
-      actualMinutes: minutes,
+      actualMinutes: entry.source === "timer" ? entry.actualMinutes : minutes,
       billedMinutes:
         entry.source === "timer" ? roundUpToQuarterHour(minutes) : minutes,
       clientId: selectedClient?.id ?? null,
       clientName: selectedClient?.name ?? "Unassigned client",
       matterId: selectedMatter?.id ?? null,
       matterName: selectedMatter?.name ?? "Unassigned matter",
-      narrative: `${formData.get("narrative") ?? ""}`.trim(),
+      narrative,
       taskCategory: `${formData.get("taskCategory") ?? ""}`.trim(),
       workDate: `${formData.get("workDate") ?? entry.workDate}`,
     });
@@ -569,6 +722,7 @@ export function TimeEntryDialog({
                 inputMode="decimal"
                 name="billedHours"
                 pattern="[0-9]*\.?[0-9]+"
+                maxLength={6}
                 required
                 type="text"
               />
@@ -580,8 +734,13 @@ export function TimeEntryDialog({
               <select
                 className="text-input"
                 name="clientId"
+                required
                 value={clientId}
-                onChange={(event) => setClientId(event.target.value)}
+                onChange={(event) => {
+                  setClientId(event.target.value);
+                  setMatterId("");
+                  setError(null);
+                }}
               >
                 <option value="">Unassigned client</option>
                 {availableClients.map((client) => (
@@ -595,8 +754,13 @@ export function TimeEntryDialog({
               <span className="field-label">Matter</span>
               <select
                 className="text-input"
-                defaultValue={entry.matterId ?? ""}
                 name="matterId"
+                required
+                value={matterId}
+                onChange={(event) => {
+                  setMatterId(event.target.value);
+                  setError(null);
+                }}
               >
                 <option value="">Unassigned matter</option>
                 {availableMatters.map((matter) => (
@@ -612,6 +776,7 @@ export function TimeEntryDialog({
             <textarea
               className="text-area"
               defaultValue={entry.narrative}
+              maxLength={4000}
               name="narrative"
               required
               rows={4}
@@ -626,6 +791,15 @@ export function TimeEntryDialog({
               name="taskCategory"
             />
           </label>
+          {error ? (
+            <div
+              className="manual-entry-message"
+              data-tone="danger"
+              role="alert"
+            >
+              {error}
+            </div>
+          ) : null}
           <button className="button-primary" type="submit">
             Save entry changes
           </button>
@@ -633,6 +807,39 @@ export function TimeEntryDialog({
       </section>
     </div>
   );
+}
+
+function validateManualEntry(
+  draft: ManualEntryDraft,
+  billedHours: number
+): string | null {
+  if (!draft.clientId) return "Select a client before saving time.";
+  if (!draft.matterId) return "Select a matter before saving time.";
+  if (!draft.workDate) return "Choose the date the work was performed.";
+  if (!Number.isFinite(billedHours) || billedHours <= 0 || billedHours > 24) {
+    return "Enter billable hours greater than 0 and no more than 24.";
+  }
+  if (!draft.narrative.trim()) {
+    return "Enter a client-facing narrative before saving time.";
+  }
+  return null;
+}
+
+function formatDecimalHours(hours: number) {
+  return Number(hours.toFixed(2)).toString();
+}
+
+function buildManualEntrySignature(
+  draft: ManualEntryDraft,
+  billedHours: number
+) {
+  return [
+    draft.workDate,
+    draft.clientId,
+    draft.matterId,
+    Math.round(billedHours * 60),
+    draft.narrative.trim().toLocaleLowerCase(),
+  ].join("|");
 }
 
 function createInitialManualEntry(): ManualEntryDraft {

@@ -10,6 +10,7 @@ import {
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { PeriodNavigator } from "@/shared/ui/PeriodNavigator";
 
+import { TimeEntryDialog } from "./TodayScreen";
 import { formatMonthPeriod, isCurrentMonth, shiftMonth } from "./periods";
 
 type MonthScreenProps = {
@@ -20,7 +21,10 @@ export function MonthScreen({ tracker }: MonthScreenProps) {
   const [monthAnchor, setMonthAnchor] = useState(
     () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
   );
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const month = tracker.getMonthReport(monthAnchor);
+  const editingEntry =
+    tracker.entries.find((entry) => entry.id === editingEntryId) ?? null;
   const monthlySummaryCards = [
     {
       label: "Month billed",
@@ -256,11 +260,33 @@ export function MonthScreen({ tracker }: MonthScreenProps) {
                       </p>
                     </div>
                   </div>
-                  <div
-                    className="insight-entry-badge"
-                    data-tone={isReviewed(entry) ? "success" : "warning"}
-                  >
-                    {isReviewed(entry) ? "Statement-ready" : "Review first"}
+                  <div className="insight-entry-rail">
+                    <div
+                      className="insight-entry-badge"
+                      data-tone={isReviewed(entry) ? "success" : "warning"}
+                    >
+                      {tracker.isEntryLocked(entry.id)
+                        ? "Included on invoice"
+                        : isReviewed(entry)
+                          ? "Statement-ready"
+                          : "Review first"}
+                    </div>
+                    <button
+                      className="button-secondary"
+                      disabled={tracker.isEntryLocked(entry.id)}
+                      type="button"
+                      onClick={() => tracker.toggleEntryReviewed(entry.id)}
+                    >
+                      {isReviewed(entry) ? "Mark unreviewed" : "Mark reviewed"}
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={tracker.isEntryLocked(entry.id)}
+                      type="button"
+                      onClick={() => setEditingEntryId(entry.id)}
+                    >
+                      {tracker.isEntryLocked(entry.id) ? "Locked" : "Edit"}
+                    </button>
                   </div>
                 </li>
               ))}
@@ -268,6 +294,13 @@ export function MonthScreen({ tracker }: MonthScreenProps) {
           )}
         </section>
       </div>
+      {editingEntry ? (
+        <TimeEntryDialog
+          entry={editingEntry}
+          onClose={() => setEditingEntryId(null)}
+          tracker={tracker}
+        />
+      ) : null}
     </div>
   );
 }

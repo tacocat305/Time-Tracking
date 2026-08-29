@@ -11,6 +11,7 @@ import {
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { PeriodNavigator } from "@/shared/ui/PeriodNavigator";
 
+import { TimeEntryDialog } from "./TodayScreen";
 import { formatWeekPeriod, isCurrentWeek, shiftWeek } from "./periods";
 
 type WeekScreenProps = {
@@ -19,7 +20,10 @@ type WeekScreenProps = {
 
 export function WeekScreen({ tracker }: WeekScreenProps) {
   const [weekAnchor, setWeekAnchor] = useState(() => new Date());
+  const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
   const week = tracker.getWeekReport(weekAnchor);
+  const editingEntry =
+    tracker.entries.find((entry) => entry.id === editingEntryId) ?? null;
   const weeklySummaryCards = [
     {
       label: "Week billed",
@@ -260,10 +264,23 @@ export function WeekScreen({ tracker }: WeekScreenProps) {
                     </div>
                     <button
                       className="button-secondary"
+                      disabled={tracker.isEntryLocked(entry.id)}
                       type="button"
                       onClick={() => tracker.toggleEntryReviewed(entry.id)}
                     >
-                      {isReviewed(entry) ? "Mark unreviewed" : "Mark reviewed"}
+                      {tracker.isEntryLocked(entry.id)
+                        ? "Included on invoice"
+                        : isReviewed(entry)
+                          ? "Mark unreviewed"
+                          : "Mark reviewed"}
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={tracker.isEntryLocked(entry.id)}
+                      type="button"
+                      onClick={() => setEditingEntryId(entry.id)}
+                    >
+                      {tracker.isEntryLocked(entry.id) ? "Locked" : "Edit"}
                     </button>
                   </div>
                 </li>
@@ -272,6 +289,13 @@ export function WeekScreen({ tracker }: WeekScreenProps) {
           )}
         </section>
       </div>
+      {editingEntry ? (
+        <TimeEntryDialog
+          entry={editingEntry}
+          onClose={() => setEditingEntryId(null)}
+          tracker={tracker}
+        />
+      ) : null}
     </div>
   );
 }

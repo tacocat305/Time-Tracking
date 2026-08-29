@@ -123,7 +123,9 @@ export function buildBillingCandidates({
       periodKey,
       periodLabel: formatPeriodLabel(periodKey),
       reviewedCount: isReviewed(entry) ? 1 : 0,
-      statementNumber: buildStatementNumber(periodKey, clientName),
+      statementNumber:
+        existingInvoice?.statementNumber ??
+        buildNextInvoiceNumber(invoices, new Date().toISOString().slice(0, 10)),
       totalAmount: amount,
       totalBilledMinutes: entry.billedMinutes,
       unreviewedCount: isReviewed(entry) ? 0 : 1,
@@ -183,7 +185,12 @@ export function buildBillingCandidates({
         periodKey,
         periodLabel: formatPeriodLabel(periodKey),
         reviewedCount: 0,
-        statementNumber: buildStatementNumber(periodKey, clientName),
+        statementNumber:
+          existingInvoice?.statementNumber ??
+          buildNextInvoiceNumber(
+            invoices,
+            new Date().toISOString().slice(0, 10)
+          ),
         totalAmount: expense.amount,
         totalBilledMinutes: 0,
         unreviewedCount: 0,
@@ -289,8 +296,20 @@ export function reconcileInvoicePayments(
   return { ...invoice, paidOn, payments, status };
 }
 
-export function buildStatementNumber(periodKey: string, clientName: string) {
-  return `LTT-${periodKey.replace("-", "")}-${slugifyRecordKey(clientName).toUpperCase()}`;
+export function buildNextInvoiceNumber(
+  invoices: InvoiceRecord[],
+  issuedOn: string
+) {
+  const year = issuedOn.slice(2, 4);
+  const highestSequence = invoices.reduce((highest, invoice) => {
+    const match = /^(\d{2})-(\d+)$/.exec(invoice.statementNumber.trim());
+    if (!match || match[1] !== year) {
+      return highest;
+    }
+    return Math.max(highest, Number(match[2]) || 0);
+  }, 0);
+
+  return `${year}-${String(highestSequence + 1).padStart(3, "0")}`;
 }
 
 function getBillingGroupKey(
