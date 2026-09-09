@@ -18,6 +18,15 @@ import {
   sendInvoiceEmail,
 } from "@/features/billing/email";
 import { InvoicePayments } from "@/features/billing/InvoicePayments";
+import {
+  filterInvoiceHistory,
+  getDefaultInvoiceHistoryFilters,
+  getInvoiceClientKey,
+  getInvoiceHistoryRange,
+  summarizeInvoiceHistory,
+  type InvoiceHistoryPeriod,
+  type InvoiceHistoryStatus,
+} from "@/features/billing/invoiceHistory";
 import { TimeEntryDialog } from "@/features/dashboard/TodayScreen";
 import type {
   InvoiceLineItem,
@@ -53,6 +62,9 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [exportState, setExportState] = useState<ExportState>(null);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [historyFilters, setHistoryFilters] = useState(
+    getDefaultInvoiceHistoryFilters
+  );
   const [pendingDeleteCandidate, setPendingDeleteCandidate] =
     useState<BillingCandidate | null>(null);
   const billingQueue = tracker.billingCandidates.filter((candidate) => {
@@ -139,6 +151,15 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
       candidate.clientId &&
       candidate.unreviewedCount === 0
   ).length;
+  const invoiceHistory = filterInvoiceHistory(
+    tracker.invoiceRecords,
+    historyFilters
+  );
+  const invoiceHistorySummary = summarizeInvoiceHistory(invoiceHistory);
+  const invoiceHistoryRange = getInvoiceHistoryRange(historyFilters);
+  const invoiceHistoryClients = getInvoiceHistoryClients(
+    tracker.invoiceRecords
+  );
 
   function handleCreateInvoice(candidate: BillingCandidate) {
     const invoiceId = tracker.createInvoiceRecord(candidate);
@@ -1165,19 +1186,18 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
         </section>
       </section>
 
-      <section className="insight-section-card">
+      <section className="insight-section-card invoice-history-workspace">
         <div className="insight-section-head">
           <div>
             <div className="eyebrow">Invoice history</div>
-            <h3 className="insight-section-title">Monthly invoices</h3>
+            <h3 className="insight-section-title">Billing history</h3>
             <p className="insight-section-copy">
-              Stored invoice records keep payment status and a durable snapshot
-              of what was billed that month.
+              Filter complete invoice snapshots by billing period, then review
+              overall and client-level billed totals.
             </p>
           </div>
           <div className="insight-section-chip">
-            {tracker.invoiceRecords.length} invoice
-            {tracker.invoiceRecords.length === 1 ? "" : "s"}
+            {invoiceHistorySummary.invoiceCount} shown
           </div>
         </div>
 
@@ -1187,48 +1207,255 @@ export function BillingScreen({ tracker }: BillingScreenProps) {
             history.
           </div>
         ) : (
-          <div className="billing-history-list">
-            {tracker.invoiceRecords.map((invoice) => (
+          <div className="invoice-history-stack">
+            <div className="invoice-history-filter-grid">
+              <label className="field">
+                <span className="field-label">Billing period</span>
+                <select
+                  aria-label="Invoice history period"
+                  className="text-input"
+                  value={historyFilters.period}
+                  onChange={(event) =>
+                    setHistoryFilters((current) => ({
+                      ...current,
+                      period: event.target.value as InvoiceHistoryPeriod,
+                    }))
+                  }
+                >
+                  <option value="all">All time</option>
+                  <option value="this-month">This month</option>
+                  <option value="last-month">Last month</option>
+                  <option value="this-year">This year</option>
+                  <option value="last-year">Last year</option>
+                  <option value="custom">Custom period</option>
+                </select>
+              </label>
+              <label className="field">
+                <span className="field-label">Client</span>
+                <select
+                  aria-label="Invoice history client"
+                  className="text-input"
+                  value={historyFilters.clientKey}
+                  onChange={(event) =>
+                    setHistoryFilters((current) => ({
+                      ...current,
+                      clientKey: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="all">All clients</option>
+                  {invoiceHistoryClients.map((client) => (
+                    <option key={client.key} value={client.key}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field-label">Status</span>
+                <select
+                  aria-label="Invoice history status"
+                  className="text-input"
+                  value={historyFilters.status}
+                  onChange={(event) =>
+                    setHistoryFilters((current) => ({
+                      ...current,
+                      status: event.target.value as InvoiceHistoryStatus,
+                    }))
+                  }
+                >
+                  <option value="all">All statuses</option>
+                  <option value="draft">Draft</option>
+                  <option value="sent">Sent</option>
+                  <option value="partial">Partially paid</option>
+                  <option value="paid">Paid</option>
+                </select>
+              </label>
               <button
-                key={invoice.id}
+                className="button-secondary invoice-history-reset"
                 type="button"
-                className={`billing-history-row${
-                  resolvedSelection?.kind === "invoice" &&
-                  resolvedSelection.id === invoice.id
-                    ? " is-active"
-                    : ""
-                }`}
                 onClick={() =>
-                  setSelection({
-                    id: invoice.id,
-                    kind: "invoice",
-                  })
+                  setHistoryFilters(getDefaultInvoiceHistoryFilters())
                 }
               >
-                <div className="billing-history-main">
-                  <p className="list-row-title">
-                    {invoice.periodLabel} · {invoice.clientName}
-                  </p>
-                  <p className="list-meta">
-                    {invoice.statementNumber} ·{" "}
-                    {buildCandidateMeta(buildPreviewFromInvoice(invoice))}
-                  </p>
-                </div>
-                <div className="billing-history-side">
-                  <div
-                    className="list-badge"
-                    data-tone={getInvoiceStatusTone(invoice.status)}
-                  >
-                    {formatInvoiceStatusLabel(invoice.status)}
-                  </div>
-                  <p className="list-meta">
-                    {invoice.status === "paid" && invoice.paidOn
-                      ? `Paid ${invoice.paidOn}`
-                      : `Issued ${invoice.issuedOn}`}
-                  </p>
-                </div>
+                Reset filters
               </button>
-            ))}
+            </div>
+
+            {historyFilters.period === "custom" ? (
+              <div className="invoice-history-custom-range">
+                <label className="field">
+                  <span className="field-label">From billing month</span>
+                  <input
+                    aria-label="Invoice history start month"
+                    className="text-input"
+                    type="month"
+                    value={historyFilters.startPeriod}
+                    onChange={(event) =>
+                      setHistoryFilters((current) => ({
+                        ...current,
+                        startPeriod: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Through billing month</span>
+                  <input
+                    aria-label="Invoice history end month"
+                    className="text-input"
+                    type="month"
+                    value={historyFilters.endPeriod}
+                    onChange={(event) =>
+                      setHistoryFilters((current) => ({
+                        ...current,
+                        endPeriod: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                {!invoiceHistoryRange.valid ? (
+                  <div
+                    className="manual-entry-message"
+                    data-tone="danger"
+                    role="alert"
+                  >
+                    Choose a starting month that is not later than the ending
+                    month.
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="invoice-history-summary-grid">
+              <article className="invoice-history-summary-card">
+                <span>Total billed</span>
+                <strong>
+                  {formatCurrency(invoiceHistorySummary.totalAmount)}
+                </strong>
+                <small>
+                  {invoiceHistorySummary.invoiceCount} invoice
+                  {invoiceHistorySummary.invoiceCount === 1 ? "" : "s"}
+                </small>
+              </article>
+              <article className="invoice-history-summary-card">
+                <span>Collected</span>
+                <strong>
+                  {formatCurrency(invoiceHistorySummary.collected)}
+                </strong>
+                <small>Recorded payments</small>
+              </article>
+              <article className="invoice-history-summary-card">
+                <span>Open balance</span>
+                <strong>{formatCurrency(invoiceHistorySummary.balance)}</strong>
+                <small>Across selected invoices</small>
+              </article>
+              <article className="invoice-history-summary-card">
+                <span>Billed hours</span>
+                <strong>
+                  {formatHours(invoiceHistorySummary.totalBilledMinutes)}
+                </strong>
+                <small>
+                  {invoiceHistorySummary.clientCount} client
+                  {invoiceHistorySummary.clientCount === 1 ? "" : "s"}
+                </small>
+              </article>
+            </div>
+
+            {invoiceHistorySummary.clients.length > 0 ? (
+              <section className="invoice-client-history">
+                <div className="invoice-history-subhead">
+                  <div>
+                    <div className="eyebrow">Client totals</div>
+                    <h4>Amount billed by client</h4>
+                  </div>
+                  <span>Selected period</span>
+                </div>
+                <div className="invoice-client-history-list">
+                  {invoiceHistorySummary.clients.map((client) => (
+                    <article
+                      className="invoice-client-history-row"
+                      key={client.clientKey}
+                    >
+                      <div>
+                        <strong>{client.clientName}</strong>
+                        <span>
+                          {client.invoiceCount} invoice
+                          {client.invoiceCount === 1 ? "" : "s"} ·{" "}
+                          {formatHours(client.totalBilledMinutes)} hours
+                        </span>
+                      </div>
+                      <div className="invoice-client-history-values">
+                        <strong>{formatCurrency(client.totalAmount)}</strong>
+                        <span>
+                          {formatCurrency(client.collected)} collected ·{" "}
+                          {formatCurrency(client.balance)} open
+                        </span>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : null}
+
+            <section>
+              <div className="invoice-history-subhead">
+                <div>
+                  <div className="eyebrow">Invoice ledger</div>
+                  <h4>Complete records</h4>
+                </div>
+                <span>{invoiceHistorySummary.invoiceCount} results</span>
+              </div>
+              {invoiceHistory.length === 0 ? (
+                <div className="empty-state">
+                  No invoices match the selected period and filters.
+                </div>
+              ) : (
+                <div className="billing-history-list">
+                  {invoiceHistory.map((invoice) => (
+                    <button
+                      key={invoice.id}
+                      type="button"
+                      className={`billing-history-row${
+                        resolvedSelection?.kind === "invoice" &&
+                        resolvedSelection.id === invoice.id
+                          ? " is-active"
+                          : ""
+                      }`}
+                      onClick={() =>
+                        setSelection({
+                          id: invoice.id,
+                          kind: "invoice",
+                        })
+                      }
+                    >
+                      <div className="billing-history-main">
+                        <p className="list-row-title">
+                          {invoice.periodLabel} · {invoice.clientName}
+                        </p>
+                        <p className="list-meta">
+                          {invoice.statementNumber} ·{" "}
+                          {buildCandidateMeta(buildPreviewFromInvoice(invoice))}
+                        </p>
+                      </div>
+                      <div className="billing-history-side">
+                        <div
+                          className="list-badge"
+                          data-tone={getInvoiceStatusTone(invoice.status)}
+                        >
+                          {formatInvoiceStatusLabel(invoice.status)}
+                        </div>
+                        <p className="list-meta">
+                          {invoice.status === "paid" && invoice.paidOn
+                            ? `Paid ${invoice.paidOn}`
+                            : `Issued ${invoice.issuedOn}`}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
           </div>
         )}
       </section>
@@ -1384,6 +1611,18 @@ function buildStatementSenderLines(
   ].filter(Boolean);
 
   return lines.length > 0 ? lines : ["No statement sender details saved yet."];
+}
+
+function getInvoiceHistoryClients(invoices: InvoiceRecord[]) {
+  const clients = new Map<string, string>();
+
+  for (const invoice of invoices) {
+    clients.set(getInvoiceClientKey(invoice), invoice.clientName);
+  }
+
+  return [...clients.entries()]
+    .map(([key, name]) => ({ key, name }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function resolveSelection(

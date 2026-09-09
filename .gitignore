@@ -10,6 +10,7 @@ outputs/
 
 # Node / frontend
 node_modules/
+.pnpm-store/
 dist/
 dist-ssr/
 .vite/

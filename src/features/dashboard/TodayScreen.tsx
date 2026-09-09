@@ -631,6 +631,7 @@ export function TimeEntryDialog({
   const [clientId, setClientId] = useState(entry.clientId ?? "");
   const [matterId, setMatterId] = useState(entry.matterId ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const availableClients = tracker.clientRecords.filter(
     (client) => client.status === "active" || client.id === entry.clientId
   );
@@ -682,12 +683,24 @@ export function TimeEntryDialog({
     }
   }
 
+  function handleDelete() {
+    if (tracker.deleteEntry(entry.id)) {
+      onClose();
+      return;
+    }
+
+    setIsConfirmingDelete(false);
+    setError(
+      "This entry could not be deleted because it is included on an invoice."
+    );
+  }
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <section
         aria-labelledby="edit-entry-title"
         aria-modal="true"
-        className="record-modal"
+        className={`record-modal${isConfirmingDelete ? " is-confirming-delete" : ""}`}
         role="dialog"
         onClick={(event) => event.stopPropagation()}
       >
@@ -779,7 +792,7 @@ export function TimeEntryDialog({
               maxLength={4000}
               name="narrative"
               required
-              rows={4}
+              rows={isConfirmingDelete ? 3 : 4}
             />
           </label>
           <label className="field">
@@ -800,9 +813,49 @@ export function TimeEntryDialog({
               {error}
             </div>
           ) : null}
-          <button className="button-primary" type="submit">
-            Save entry changes
-          </button>
+          {isConfirmingDelete ? (
+            <div className="time-entry-delete-confirmation" role="alert">
+              <div>
+                <strong>Delete this time entry?</strong>
+                <span>
+                  This permanently removes the recorded hours and cannot be
+                  undone.
+                </span>
+              </div>
+              <div className="button-row">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  onClick={() => setIsConfirmingDelete(false)}
+                >
+                  Keep entry
+                </button>
+                <button
+                  className="button-danger"
+                  type="button"
+                  onClick={handleDelete}
+                >
+                  Delete permanently
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="time-entry-form-actions">
+              <button
+                className="button-danger"
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setIsConfirmingDelete(true);
+                }}
+              >
+                Delete entry
+              </button>
+              <button className="button-primary" type="submit">
+                Save entry changes
+              </button>
+            </div>
+          )}
         </form>
       </section>
     </div>

@@ -1,15 +1,16 @@
 # Legal Time Tracker
 
-A private, local-first desktop workspace for legal time, client expenses, monthly invoices, and payment follow-up.
+A privacy-focused, local-first desktop workspace for legal time, client expenses, monthly invoices, and payment follow-up.
 
 ## Working Features
 
 - primary manual-entry workflow with decimal-hour input, validation, keyboard save, reusable matter context, and an optional live timer
 - quarter-hour billing with actual timer duration retained separately
 - client and matter records, client rate overrides, and safe client archiving
-- daily summaries plus navigable historical week and month reports with in-place historical editing
-- editable time and expense records until they become part of an invoice, then consistent record locking
+- daily summaries plus navigable historical week and month reports with in-place historical editing and deletion
+- editable and safely deletable time and expense records until they become part of an invoice, then consistent record locking
 - monthly invoice drafts built from reviewed time and reimbursable expenses
+- complete invoice history with all-time, monthly, yearly, custom-period, client, and status filters plus overall and per-client billed totals
 - receipt-backed expenses with tax categories, yearly summaries, and CSV export
 - reconciled partial/full payment records with automatic invoice balances
 - reference-matched invoice PDFs with embedded Arial, measured source geometry/colors, the Krewson Law logo, sequential `YY-NNN` numbers, and editable draft issue metadata

@@ -1525,6 +1525,44 @@ button {
   gap: 0.95rem;
 }
 
+.time-entry-form-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.7rem;
+  justify-content: space-between;
+}
+
+.time-entry-delete-confirmation {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-panel));
+  border: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
+  border-radius: 16px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem 0.95rem;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+.time-entry-delete-confirmation > div:first-child {
+  display: grid;
+  flex: 1 1 240px;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.time-entry-delete-confirmation > .button-row {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.time-entry-delete-confirmation span {
+  color: var(--color-muted);
+  font-size: 0.88rem;
+}
+
 .field-grid {
   display: grid;
   gap: 0.85rem;
@@ -1680,6 +1718,10 @@ select.text-input {
   overflow: auto;
   padding: 1.25rem;
   width: min(720px, 100%);
+}
+
+.record-modal.is-confirming-delete .composer-form {
+  gap: 0.7rem;
 }
 
 .billing-delete-modal {
@@ -1911,6 +1953,126 @@ select.text-input {
 
 .billing-history-side {
   justify-items: end;
+}
+
+.invoice-history-stack {
+  display: grid;
+  gap: 1.15rem;
+}
+
+.invoice-history-filter-grid {
+  align-items: end;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+}
+
+.invoice-history-reset {
+  min-height: 46px;
+}
+
+.invoice-history-custom-range {
+  align-items: end;
+  background: color-mix(in srgb, var(--color-accent-soft) 18%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0.9rem;
+}
+
+.invoice-history-custom-range .manual-entry-message {
+  grid-column: 1 / -1;
+}
+
+.invoice-history-summary-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.invoice-history-summary-card {
+  background: linear-gradient(
+    150deg,
+    color-mix(in srgb, var(--color-panel-raised) 88%, white),
+    color-mix(in srgb, var(--color-accent-soft) 14%, white)
+  );
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.95rem;
+}
+
+.invoice-history-summary-card > span,
+.invoice-history-summary-card small {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+}
+
+.invoice-history-summary-card strong {
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 1.55rem;
+  letter-spacing: -0.035em;
+}
+
+.invoice-client-history {
+  background: color-mix(in srgb, var(--color-panel-raised) 54%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 20px;
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.invoice-history-subhead {
+  align-items: end;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+
+.invoice-history-subhead h4 {
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  font-size: 1.15rem;
+  margin: 0.15rem 0 0;
+}
+
+.invoice-history-subhead > span {
+  color: var(--color-muted);
+  font-size: 0.84rem;
+}
+
+.invoice-client-history-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.invoice-client-history-row {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-panel) 72%, transparent);
+  border-radius: 14px;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.8rem 0.9rem;
+}
+
+.invoice-client-history-row > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.invoice-client-history-row span {
+  color: var(--color-muted);
+  font-size: 0.84rem;
+}
+
+.invoice-client-history-values {
+  justify-items: end;
+  text-align: right;
 }
 
 @keyframes timerPulse {
@@ -2642,6 +2804,15 @@ select.text-input {
     grid-template-columns: 1fr;
   }
 
+  .invoice-history-filter-grid,
+  .invoice-history-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .invoice-history-reset {
+    width: 100%;
+  }
+
   .today-entry-row,
   .insight-breakdown-row,
   .insight-entry-row {
@@ -2667,6 +2838,11 @@ select.text-input {
     grid-template-columns: 1fr;
   }
 
+  .invoice-history-filter-grid,
+  .invoice-history-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
   .topbar {
     align-items: start;
     flex-direction: column;
@@ -2686,11 +2862,23 @@ select.text-input {
   .expense-tax-controls,
   .expense-tax-summary,
   .expense-receipt-card,
+  .invoice-client-history-row,
   .invoice-payment-row,
   .invoice-delivery-row,
+  .time-entry-delete-confirmation,
+  .time-entry-form-actions,
   .settings-backup-destination {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .invoice-history-custom-range {
+    grid-template-columns: 1fr;
+  }
+
+  .invoice-client-history-values {
+    justify-items: start;
+    text-align: left;
   }
 
   .settings-security-status {

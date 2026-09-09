@@ -184,7 +184,7 @@ describe("production workspace", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("edits a saved entry from the weekly historical review", () => {
+  it("edits and deletes a saved entry from the weekly historical review", () => {
     render(<App />);
     createClientAndMatter("Historical Review Co.", "Ongoing advice");
     openScreen("Today");
@@ -207,6 +207,24 @@ describe("production workspace", () => {
     expect(
       screen.getByText("Corrected from weekly review")
     ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const deleteDialog = screen.getByRole("dialog", { name: "Edit entry" });
+    fireEvent.click(
+      within(deleteDialog).getByRole("button", { name: "Delete entry" })
+    );
+    expect(
+      within(deleteDialog).getByText("Delete this time entry?")
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(deleteDialog).getByRole("button", {
+        name: "Delete permanently",
+      })
+    );
+
+    expect(
+      screen.queryByText("Corrected from weekly review")
+    ).not.toBeInTheDocument();
   });
 
   it("archives and restores a client without deleting its history", () => {
@@ -241,7 +259,7 @@ describe("production workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }));
     fireEvent.click(screen.getByRole("button", { name: "Create invoice" }));
 
-    expect(screen.getByText("Monthly invoices")).toBeInTheDocument();
+    expect(screen.getByText("Invoice record")).toBeInTheDocument();
     expect(
       (screen.getByLabelText("Invoice number") as HTMLInputElement).value
     ).toMatch(/^\d{2}-001$/);
@@ -271,6 +289,55 @@ describe("production workspace", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(screen.getByRole("button", { name: "Remove payment" }));
     expect(screen.getByLabelText("Invoice status")).toHaveValue("sent");
+
+    const history = screen.getByText("Billing history").closest("section")!;
+    expect(
+      within(history).getByText("Amount billed by client")
+    ).toBeInTheDocument();
+    expect(
+      within(history).getAllByText("Cedar Consulting").length
+    ).toBeGreaterThan(0);
+
+    fireEvent.change(within(history).getByLabelText("Invoice history period"), {
+      target: { value: "last-month" },
+    });
+    expect(
+      within(history).getByText(
+        "No invoices match the selected period and filters."
+      )
+    ).toBeInTheDocument();
+
+    fireEvent.change(within(history).getByLabelText("Invoice history period"), {
+      target: { value: "all" },
+    });
+    expect(
+      within(history).getAllByText("Cedar Consulting").length
+    ).toBeGreaterThan(0);
+
+    fireEvent.change(within(history).getByLabelText("Invoice history period"), {
+      target: { value: "custom" },
+    });
+    fireEvent.change(
+      within(history).getByLabelText("Invoice history start month"),
+      { target: { value: "2026-10" } }
+    );
+    fireEvent.change(
+      within(history).getByLabelText("Invoice history end month"),
+      { target: { value: "2026-09" } }
+    );
+    expect(
+      within(history).getByText(
+        "Choose a starting month that is not later than the ending month."
+      )
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(history).getByRole("button", { name: "Reset filters" })
+    );
+    expect(
+      within(history).getByLabelText("Invoice history period")
+    ).toHaveValue("all");
+
     openScreen("Today");
     expect(screen.getByRole("button", { name: "Invoiced" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
